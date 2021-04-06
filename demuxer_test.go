@@ -179,6 +179,27 @@ ffffffffffffffffffffffffffffffff`)
 	assert.NotNil(t, d.PMT)
 }
 
+func TestDemuxerNextDataSCTE35(t *testing.T) {
+	scte35 := hexToBytes(`4741f61900fc302500000003289800fff01405000002547fefff4fc614f8
+fe00a4e9f50000000000000c1324f6ffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ffffffffffffffff`)
+	r := bytes.NewReader(scte35)
+	assert.Equal(t, 188, r.Len())
+
+	dmx := NewDemuxer(context.Background(), r, DemuxerOptPacketSize(188))
+	dmx.programMap.set(502, 1)
+
+	d, err := dmx.NextData()
+	assert.NoError(t, err)
+	assert.NotNil(t, d)
+	assert.Equal(t, uint16(502), d.FirstPacket.Header.PID)
+	//assert.NotNil(t, d.SCTE35)
+}
+
 func TestDemuxerRewind(t *testing.T) {
 	r := bytes.NewReader([]byte("content"))
 	dmx := NewDemuxer(context.Background(), r)
