@@ -84,6 +84,12 @@ func parseData(ps []*Packet, prs PacketsParser, pm *programMap) (ds []*DemuxerDa
 		// Parse PES data
 		var pesData *PESData
 		if pesData, err = parsePESData(i); err != nil {
+			if err == ErrTruncatedPESPackets {
+				// The accumulator gave us all the packets available, but there's still not
+				// enough data. Ignore and keep going.
+				err = nil
+				return
+			}
 			err = fmt.Errorf("astits: parsing PES data failed: %w", err)
 			return
 		}

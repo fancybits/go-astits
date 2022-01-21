@@ -1,6 +1,7 @@
 package astits
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/asticode/go-astikit"
@@ -34,6 +35,11 @@ const (
 	TrickModeControlFreezeFrame = 2
 	TrickModeControlSlowMotion  = 1
 	TrickModeControlSlowReverse = 4
+)
+
+// Errors
+var (
+	ErrTruncatedPESPackets = errors.New("astits: missing data in PES packets")
 )
 
 const (
@@ -115,6 +121,8 @@ func (h *PESHeader) IsVideoStream() bool {
 }
 
 // parsePESData parses a PES data
+// Returns ErrTruncatedPESPackets if the header was parsed, but the
+// advertised PacketLength was not available.
 func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
 	// Create data
 	d = &PESData{}
@@ -126,6 +134,11 @@ func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
 	var dataStart, dataEnd int
 	if d.Header, dataStart, dataEnd, err = parsePESHeader(i); err != nil {
 		err = fmt.Errorf("astits: parsing PES header failed: %w", err)
+		return
+	}
+
+	if int(d.Header.PacketLength) > i.Len()-dataStart {
+		err = ErrTruncatedPESPackets
 		return
 	}
 
