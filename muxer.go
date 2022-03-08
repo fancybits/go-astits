@@ -384,7 +384,7 @@ func (m *Muxer) generatePMT() error {
 			//LastSectionNumber:    0,
 			//SectionNumber:        0,
 			TableIDExtension: m.pmt.ProgramNumber,
-			VersionNumber:    uint8(m.pmtVersion.get()),
+			VersionNumber:    0, //uint8(m.pmtVersion.get()),
 		},
 	}
 	section := PSISection{
