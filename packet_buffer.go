@@ -114,6 +114,26 @@ func rewind(r io.Reader) (n int64, err error) {
 	return
 }
 
+func readByte(r io.Reader) (b byte, err error) {
+	if br, ok := r.(*bufio.Reader); ok {
+		b, err = br.ReadByte()
+		if err != nil && err == io.EOF || err == io.ErrUnexpectedEOF {
+			err = ErrNoMorePackets
+		}
+
+		return
+	}
+
+	bytes := make([]byte, 1)
+	_, err = r.Read(bytes)
+	b = bytes[0]
+	if err != nil && err == io.EOF || err == io.ErrUnexpectedEOF {
+		err = ErrNoMorePackets
+	}
+
+	return
+}
+
 // next fetches the next packet from the buffer
 func (pb *packetBuffer) next() (p *Packet, err error) {
 	// Read
@@ -128,6 +148,15 @@ func (pb *packetBuffer) next() (p *Packet, err error) {
 			err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
 		}
 		return
+	}
+
+	for pb.packetReadBuffer[0] != syncByte {
+		nextByte, err := readByte(pb.r)
+		if err != nil {
+			return nil, err
+		}
+
+		pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
 	}
 
 	// Parse packet
