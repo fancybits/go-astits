@@ -130,6 +130,34 @@ func (pb *packetBuffer) next() (p *Packet, err error) {
 		return
 	}
 
+	for pb.packetReadBuffer[0] != syncByte {
+		var nextByte byte
+		if br, ok := pb.r.(*bufio.Reader); ok {
+			nextByte, err = br.ReadByte()
+			if err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					err = ErrNoMorePackets
+				} else {
+					err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
+				}
+				return
+			}
+		} else {
+			bytes := make([]byte, 1)
+			_, err = pb.r.Read(bytes)
+			if err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					err = ErrNoMorePackets
+				} else {
+					err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
+				}
+				return
+			}
+		}
+
+		pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
+	}
+
 	// Parse packet
 	if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer)); err != nil {
 		err = fmt.Errorf("astits: building packet failed: %w", err)
