@@ -129,8 +129,21 @@ func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
 		return
 	}
 
-	var dataAvailable = i.Len() - dataStart
-	if int(d.Header.PacketLength) > dataAvailable {
+	// Validation
+	if dataEnd < dataStart {
+		err = fmt.Errorf("astits: parsing PES header failed: data end %d is before data start %d", dataEnd, dataStart)
+		return
+	}
+
+	bufferLen := i.Len() - i.Offset()
+	if bufferLen < dataStart {
+		err = fmt.Errorf("astits: parsing PES header failed: packet length is less than data start")
+		return
+	}
+
+	packetLength := int(d.Header.PacketLength)
+	dataAvailable := bufferLen - dataStart
+	if packetLength > dataAvailable {
 		dataEnd = dataAvailable + dataStart
 		d.Header.PacketLength = uint16(dataAvailable)
 	}
