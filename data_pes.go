@@ -135,14 +135,13 @@ func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
 		return
 	}
 
-	bufferLen := i.Len() - i.Offset()
-	if bufferLen < dataStart {
+	if i.Len() < dataStart {
 		err = fmt.Errorf("astits: parsing PES header failed: packet length is less than data start")
 		return
 	}
 
 	packetLength := int(d.Header.PacketLength)
-	dataAvailable := bufferLen - dataStart
+	dataAvailable := i.Len() - dataStart
 	if packetLength > dataAvailable {
 		dataEnd = dataAvailable + dataStart
 		d.Header.PacketLength = uint16(dataAvailable)
