@@ -2,6 +2,7 @@ package astits
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 
@@ -11,15 +12,17 @@ import (
 // packetBuffer represents a packet buffer
 type packetBuffer struct {
 	packetSize       int
+	s                PacketSkipper
 	r                io.Reader
 	packetReadBuffer []byte
 }
 
 // newPacketBuffer creates a new packet buffer
-func newPacketBuffer(r io.Reader, packetSize int) (pb *packetBuffer, err error) {
+func newPacketBuffer(r io.Reader, packetSize int, s PacketSkipper) (pb *packetBuffer, err error) {
 	// Init
 	pb = &packetBuffer{
 		packetSize: packetSize,
+		s:          s,
 		r:          r,
 	}
 
@@ -141,28 +144,34 @@ func (pb *packetBuffer) next() (p *Packet, err error) {
 		pb.packetReadBuffer = make([]byte, pb.packetSize)
 	}
 
-	if _, err = io.ReadFull(pb.r, pb.packetReadBuffer); err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			err = ErrNoMorePackets
-		} else {
-			err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
-		}
-		return
-	}
-
-	for pb.packetReadBuffer[0] != syncByte {
-		nextByte, err := readByte(pb.r)
-		if err != nil {
-			return nil, err
+	// Loop to make sure we return a packet even if first packets are skipped
+	for p == nil {
+		if _, err = io.ReadFull(pb.r, pb.packetReadBuffer); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				err = ErrNoMorePackets
+			} else {
+				err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
+			}
+			return
 		}
 
-		pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
+		for pb.packetReadBuffer[0] != syncByte {
+			nextByte, err := readByte(pb.r)
+			if err != nil {
+				return nil, err
+			}
+
+			pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
+		}
+
+		// Parse packet
+		if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer), pb.s); err != nil {
+			if !errors.Is(err, errSkippedPacket) {
+				err = fmt.Errorf("astits: building packet failed: %w", err)
+				return
+			}
+		}
 	}
 
-	// Parse packet
-	if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer)); err != nil {
-		err = fmt.Errorf("astits: building packet failed: %w", err)
-		return
-	}
 	return
 }
