@@ -52,7 +52,7 @@ func TestPacketWithInitialGarbage(t *testing.T) {
 	w.Write([]byte("test"))
 	r := bytes.NewReader(buf.Bytes())
 
-	pb, err := newPacketBuffer(r, 188)
+	pb, err := newPacketBuffer(r, 188, nil)
 	assert.NoError(t, err)
 	p, err := pb.next()
 	assert.NoError(t, err)
