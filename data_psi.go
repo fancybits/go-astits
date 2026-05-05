@@ -1,6 +1,7 @@
 package astits
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/asticode/go-astikit"
@@ -45,6 +46,8 @@ const (
 	PSITableIDNITVariant1 PSITableID = 0x40
 	PSITableIDNITVariant2 PSITableID = 0x41
 )
+
+var ErrCRC32Mismatch = errors.New("astits: CRC32 mismatch")
 
 // PSIData represents a PSI data
 // https://en.wikipedia.org/wiki/Program-specific_information
@@ -175,7 +178,7 @@ func parsePSISection(i *astikit.BytesIterator) (s *PSISection, stop bool, err er
 
 			// Check CRC32
 			if crc32 != s.CRC32 {
-				err = fmt.Errorf("astits: Table CRC32 %x != computed CRC32 %x", s.CRC32, crc32)
+				err = errors.Join(ErrCRC32Mismatch, fmt.Errorf("astits: Table CRC32 %x != computed CRC32 %x", s.CRC32, crc32))
 				return
 			}
 		}
