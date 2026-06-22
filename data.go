@@ -185,6 +185,21 @@ func isPSIComplete(ps []*Packet) bool {
 
 // isPESComplete checks whether payload fully contains PES packet
 func isPESComplete(ps []*Packet) bool {
+	if len(ps) == 0 {
+		return false
+	}
+	// PES_packet_length is at bytes 4-5 (after the 3-byte start-code prefix and
+	// 1-byte stream id), always within the first packet. Read just those two bytes
+	// via the iterator the parser is built on, instead of reassembling all packets
+	// and parsing the full header below: a zero length marks an unbounded
+	// elementary stream (typically video) whose completeness can't be determined
+	// here, so bail — otherwise that work runs for every packet of every such PES.
+	lenIter := astikit.NewBytesIterator(ps[0].Payload)
+	lenIter.Seek(4)
+	if pktLen, err := lenIter.NextBytesNoCopy(2); err != nil || (pktLen[0] == 0 && pktLen[1] == 0) {
+		return false
+	}
+
 	// Get payload length
 	var l int
 	for _, p := range ps {
