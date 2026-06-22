@@ -114,8 +114,11 @@ func (h *PESHeader) IsVideoStream() bool {
 		h.StreamID == 0xfd
 }
 
-// parsePESData parses a PES data
-func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
+// parsePESData parses a PES data.
+// If noCopy is true, d.Data points into the iterator's underlying buffer rather
+// than a fresh copy; the caller must consume it before that buffer is reused
+// (see DemuxerOptNoCopyPayload).
+func parsePESData(i *astikit.BytesIterator, noCopy bool) (d *PESData, err error) {
 	// Create data
 	d = &PESData{}
 
@@ -139,7 +142,12 @@ func parsePESData(i *astikit.BytesIterator) (d *PESData, err error) {
 	i.Seek(dataStart)
 
 	// Extract data
-	if d.Data, err = i.NextBytes(dataEnd - dataStart); err != nil {
+	if noCopy {
+		d.Data, err = i.NextBytesNoCopy(dataEnd - dataStart)
+	} else {
+		d.Data, err = i.NextBytes(dataEnd - dataStart)
+	}
+	if err != nil {
 		err = fmt.Errorf("astits: fetching next bytes failed: %w", err)
 		return
 	}

@@ -20,13 +20,13 @@ func TestParseData(t *testing.T) {
 		skip = true
 		return
 	}
-	ds, err := parseData(ps, c, pm)
+	ds, _, err := parseData(ps, c, pm, false)
 	assert.NoError(t, err)
 	assert.Equal(t, cds, ds)
 
 	// Do nothing for CAT
 	ps = []*Packet{{Header: PacketHeader{PID: PIDCAT}}}
-	ds, err = parseData(ps, nil, pm)
+	ds, _, err = parseData(ps, nil, pm, false)
 	assert.NoError(t, err)
 	assert.Empty(t, ds)
 
@@ -42,7 +42,7 @@ func TestParseData(t *testing.T) {
 			Payload: p[33:],
 		},
 	}
-	ds, err = parseData(ps, nil, pm)
+	ds, _, err = parseData(ps, nil, pm, false)
 	assert.NoError(t, err)
 	assert.Equal(t, []*DemuxerData{
 		{
@@ -64,7 +64,7 @@ func TestParseData(t *testing.T) {
 			Payload: p[33:],
 		},
 	}
-	ds, err = parseData(ps, nil, pm)
+	ds, _, err = parseData(ps, nil, pm, false)
 	assert.NoError(t, err)
 	assert.Equal(t, psi.toData(
 		&Packet{Header: ps[0].Header, AdaptationField: ps[0].AdaptationField},

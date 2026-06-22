@@ -30,11 +30,14 @@ type Demuxer struct {
 	optPacketSize    int
 	optPacketsParser PacketsParser
 	optPacketSkipper PacketSkipper
+	optNoCopyPayload bool
 
 	packetBuffer *packetBuffer
 	packetPool   *packetPool
 	programMap   *programMap
 	r            io.Reader
+
+	pendingPoolItem *bytesPoolItem
 }
 
 // PacketsParser represents an object capable of parsing a set of packets containing a unique payload spanning over those packets
@@ -92,6 +95,16 @@ func DemuxerOptPacketSkipper(s PacketSkipper) func(*Demuxer) {
 	}
 }
 
+// DemuxerOptNoCopyPayload makes NextData return PES data (DemuxerData.PES.Data)
+// that points directly into the demuxer's internal pooled buffer instead of a
+// fresh copy, removing a per-PES allocation. The returned PES.Data is only valid
+// until the next call to NextData; copy it if you need to retain it longer.
+func DemuxerOptNoCopyPayload() func(*Demuxer) {
+	return func(d *Demuxer) {
+		d.optNoCopyPayload = true
+	}
+}
+
 // NextPacket retrieves the next packet
 func (dmx *Demuxer) NextPacket() (p *Packet, err error) {
 	// Check ctx error
@@ -121,6 +134,13 @@ func (dmx *Demuxer) NextPacket() (p *Packet, err error) {
 
 // NextData retrieves the next data
 func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
+	// Release the pooled buffer backing the previous no-copy PES payload; the
+	// caller has had access to it until this call (see DemuxerOptNoCopyPayload).
+	if dmx.pendingPoolItem != nil {
+		bytesPool.put(dmx.pendingPoolItem)
+		dmx.pendingPoolItem = nil
+	}
+
 	// Check data buffer
 	if len(dmx.dataBuffer) > 0 {
 		d = dmx.dataBuffer[0]
@@ -145,7 +165,8 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 
 					// Parse data
 					var errParseData error
-					if ds, errParseData = parseData(ps, dmx.optPacketsParser, dmx.programMap); errParseData != nil {
+					var poolItem *bytesPoolItem
+					if ds, poolItem, errParseData = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload); errParseData != nil {
 						// Log error as there may be some incomplete data here
 						// We still want to try to parse all packets, in case final data is complete
 						dmx.l.Error(fmt.Errorf("astits: parsing data failed: %w", errParseData))
@@ -154,8 +175,12 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 
 					// Update data
 					if d = dmx.updateData(ds); d != nil {
+						dmx.pendingPoolItem = poolItem
 						err = nil
 						return
+					}
+					if poolItem != nil {
+						bytesPool.put(poolItem)
 					}
 				}
 				return
@@ -170,14 +195,19 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 		}
 
 		// Parse data
-		if ds, err = parseData(ps, dmx.optPacketsParser, dmx.programMap); err != nil {
+		var poolItem *bytesPoolItem
+		if ds, poolItem, err = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload); err != nil {
 			err = fmt.Errorf("astits: building new data failed: %w", err)
 			return
 		}
 
 		// Update data
 		if d = dmx.updateData(ds); d != nil {
+			dmx.pendingPoolItem = poolItem
 			return
+		}
+		if poolItem != nil {
+			bytesPool.put(poolItem)
 		}
 	}
 }
@@ -207,6 +237,10 @@ func (dmx *Demuxer) updateData(ds []*DemuxerData) (d *DemuxerData) {
 // Rewind rewinds the demuxer reader
 func (dmx *Demuxer) Rewind() (n int64, err error) {
 	dmx.dataBuffer = []*DemuxerData{}
+	if dmx.pendingPoolItem != nil {
+		bytesPool.put(dmx.pendingPoolItem)
+		dmx.pendingPoolItem = nil
+	}
 	dmx.packetBuffer = nil
 	dmx.packetPool = newPacketPool(dmx.programMap)
 	if n, err = rewind(dmx.r); err != nil {

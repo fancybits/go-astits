@@ -399,7 +399,7 @@ func TestParsePESData(t *testing.T) {
 			tc.headerBytesFunc(w, true, true)
 			tc.optionalHeaderBytesFunc(w, true, true)
 			tc.bytesFunc(w, true, true)
-			d, err := parsePESData(astikit.NewBytesIterator(buf.Bytes()))
+			d, err := parsePESData(astikit.NewBytesIterator(buf.Bytes()), false)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.pesData, d)
 		})
@@ -499,7 +499,7 @@ func BenchmarkParsePESData(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				parsePESData(astikit.NewBytesIterator(bss[ti]))
+				parsePESData(astikit.NewBytesIterator(bss[ti]), false)
 			}
 		})
 	}
