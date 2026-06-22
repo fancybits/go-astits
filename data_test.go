@@ -94,3 +94,21 @@ func TestIsPESPayload(t *testing.T) {
 	w.Write("000000000000000000000001")
 	assert.True(t, isPESPayload(buf.Bytes()))
 }
+
+func TestIsPESComplete(t *testing.T) {
+	// A bounded PES (PES_packet_length > 0) with all its bytes present.
+	full := pesWithHeaderBytes()
+	assert.True(t, isPESComplete([]*Packet{{Payload: full}}))
+
+	// The same PES truncated below its declared length is not yet complete.
+	assert.False(t, isPESComplete([]*Packet{{Payload: full[:70]}}))
+
+	// An unbounded PES (PES_packet_length == 0, e.g. video): completeness cannot
+	// be determined, so it returns false without reassembling the full payload.
+	unbounded := append([]byte(nil), full...)
+	unbounded[4], unbounded[5] = 0, 0 // zero the PES_packet_length
+	assert.False(t, isPESComplete([]*Packet{{Payload: unbounded}}))
+
+	// Degenerate: a first packet too short to even hold the length field.
+	assert.False(t, isPESComplete([]*Packet{{Payload: []byte{0x00, 0x00, 0x01}}}))
+}
