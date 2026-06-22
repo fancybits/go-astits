@@ -127,3 +127,27 @@ func TestDemuxerNoCopyPayloadRewind(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, first, d2.PES.Data)
 }
+
+// TestDemuxerNoCopyPayloadPacketsParserDisablesPooling verifies that a custom
+// PacketsParser disables per-packet payload pooling. Such a parser receives the
+// packets and may retain their payloads, so they must not be drawn from the pool
+// (and thus must not be recycled).
+func TestDemuxerNoCopyPayloadPacketsParserDisablesPooling(t *testing.T) {
+	stream := noCopyPESStream(1)
+
+	// Option alone: pooling is enabled.
+	dmx := NewDemuxer(context.Background(), bytes.NewReader(stream),
+		DemuxerOptPacketSize(188), DemuxerOptNoCopyPayload())
+	_, err := dmx.NextPacket()
+	assert.NoError(t, err)
+	assert.NotNil(t, dmx.packetBuffer.payloadPool, "pooling should be enabled with the option and no custom parser")
+
+	// Option + custom PacketsParser: pooling is disabled.
+	pp := func(ps []*Packet) ([]*DemuxerData, bool, error) { return nil, false, nil }
+	dmx2 := NewDemuxer(context.Background(), bytes.NewReader(stream),
+		DemuxerOptPacketSize(188), DemuxerOptNoCopyPayload(), DemuxerOptPacketsParser(pp))
+	p, err := dmx2.NextPacket()
+	assert.NoError(t, err)
+	assert.Nil(t, dmx2.packetBuffer.payloadPool, "pooling must be disabled when a custom PacketsParser is set")
+	assert.Nil(t, p.payloadBuf, "packet payload must not be pooled when a custom parser is set")
+}
