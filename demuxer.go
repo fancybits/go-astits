@@ -97,8 +97,13 @@ func DemuxerOptPacketSkipper(s PacketSkipper) func(*Demuxer) {
 
 // DemuxerOptNoCopyPayload makes NextData return PES data (DemuxerData.PES.Data)
 // that points directly into the demuxer's internal pooled buffer instead of a
-// fresh copy, removing a per-PES allocation. The returned PES.Data is only valid
-// until the next call to NextData; copy it if you need to retain it longer.
+// fresh copy, removing a per-PES allocation; it also pools the per-packet payload
+// buffers used to assemble that data. The returned PES.Data is only valid until
+// the next call to NextData; copy it if you need to retain it longer.
+//
+// This optimizes the NextData path. It is not intended for direct NextPacket use
+// (those payloads are not recycled), and a custom PacketsParser disables the
+// per-packet payload pooling, since the parser may retain packet payloads.
 func DemuxerOptNoCopyPayload() func(*Demuxer) {
 	return func(d *Demuxer) {
 		d.optNoCopyPayload = true
@@ -116,7 +121,7 @@ func (dmx *Demuxer) NextPacket() (p *Packet, err error) {
 
 	// Create packet buffer if not exists
 	if dmx.packetBuffer == nil {
-		if dmx.packetBuffer, err = newPacketBuffer(dmx.r, dmx.optPacketSize, dmx.optPacketSkipper); err != nil {
+		if dmx.packetBuffer, err = newPacketBuffer(dmx.r, dmx.optPacketSize, dmx.optPacketSkipper, dmx.optNoCopyPayload && dmx.optPacketsParser == nil); err != nil {
 			err = fmt.Errorf("astits: creating packet buffer failed: %w", err)
 			return
 		}
@@ -166,7 +171,9 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 					// Parse data
 					var errParseData error
 					var poolItem *bytesPoolItem
-					if ds, poolItem, errParseData = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload); errParseData != nil {
+					ds, poolItem, errParseData = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload)
+					dmx.recyclePackets(ps)
+					if errParseData != nil {
 						// Log error as there may be some incomplete data here
 						// We still want to try to parse all packets, in case final data is complete
 						dmx.l.Error(fmt.Errorf("astits: parsing data failed: %w", errParseData))
@@ -196,7 +203,9 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 
 		// Parse data
 		var poolItem *bytesPoolItem
-		if ds, poolItem, err = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload); err != nil {
+		ds, poolItem, err = parseData(ps, dmx.optPacketsParser, dmx.programMap, dmx.optNoCopyPayload)
+		dmx.recyclePackets(ps)
+		if err != nil {
 			err = fmt.Errorf("astits: building new data failed: %w", err)
 			return
 		}
@@ -208,6 +217,26 @@ func (dmx *Demuxer) NextData() (d *DemuxerData, err error) {
 		}
 		if poolItem != nil {
 			bytesPool.put(poolItem)
+		}
+	}
+}
+
+// recyclePackets returns the packets' pooled payload buffers to the pool. Their
+// contents have already been copied into the parsed data by parseData, so they
+// are no longer referenced and can back subsequent packets. No-op unless
+// DemuxerOptNoCopyPayload is set (and no custom PacketsParser is in use).
+//
+// Packets dropped by the accumulator (duplicate or discontinuity) never reach
+// here; their pooled buffers are simply left to GC, which is acceptable.
+func (dmx *Demuxer) recyclePackets(ps []*Packet) {
+	if dmx.packetBuffer == nil || dmx.packetBuffer.payloadPool == nil {
+		return
+	}
+	for _, p := range ps {
+		if p.payloadBuf != nil {
+			dmx.packetBuffer.payloadPool.Put(p.payloadBuf)
+			p.payloadBuf = nil
+			p.Payload = nil
 		}
 	}
 }

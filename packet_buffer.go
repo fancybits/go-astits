@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/asticode/go-astikit"
 )
@@ -15,10 +16,11 @@ type packetBuffer struct {
 	s                PacketSkipper
 	r                io.Reader
 	packetReadBuffer []byte
+	payloadPool      *sync.Pool // when set, packet payloads are drawn from here instead of freshly allocated
 }
 
 // newPacketBuffer creates a new packet buffer
-func newPacketBuffer(r io.Reader, packetSize int, s PacketSkipper) (pb *packetBuffer, err error) {
+func newPacketBuffer(r io.Reader, packetSize int, s PacketSkipper, noCopyPayload bool) (pb *packetBuffer, err error) {
 	// Init
 	pb = &packetBuffer{
 		packetSize: packetSize,
@@ -33,6 +35,11 @@ func newPacketBuffer(r io.Reader, packetSize int, s PacketSkipper) (pb *packetBu
 			err = fmt.Errorf("astits: auto detecting packet size failed: %w", err)
 			return
 		}
+	}
+
+	if noCopyPayload {
+		size := pb.packetSize
+		pb.payloadPool = &sync.Pool{New: func() interface{} { b := make([]byte, size); return &b }}
 	}
 	return
 }
@@ -165,7 +172,7 @@ func (pb *packetBuffer) next() (p *Packet, err error) {
 		}
 
 		// Parse packet
-		if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer), pb.s); err != nil {
+		if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer), pb.s, pb.payloadPool); err != nil {
 			if !errors.Is(err, errSkippedPacket) {
 				err = fmt.Errorf("astits: building packet failed: %w", err)
 				return

@@ -3,6 +3,8 @@ package astits
 import (
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/asticode/go-astikit"
 )
 
@@ -27,7 +29,8 @@ var errSkippedPacket = errors.New("astits: skipped packet")
 type Packet struct {
 	AdaptationField *PacketAdaptationField
 	Header          PacketHeader
-	Payload         []byte // This is only the payload content
+	Payload         []byte  // This is only the payload content
+	payloadBuf      *[]byte // pooled backing buffer for Payload; returned to the pool by Demuxer.recyclePackets and valid only until then (nil on the default path)
 }
 
 // PacketHeader represents a packet header
@@ -77,7 +80,7 @@ type PacketAdaptationExtensionField struct {
 }
 
 // parsePacket parses a packet
-func parsePacket(i *astikit.BytesIterator, s PacketSkipper) (p *Packet, err error) {
+func parsePacket(i *astikit.BytesIterator, s PacketSkipper, payloadPool *sync.Pool) (p *Packet, err error) {
 	// Get next byte
 	var b byte
 	if b, err = i.NextByte(); err != nil {
@@ -120,7 +123,24 @@ func parsePacket(i *astikit.BytesIterator, s PacketSkipper) (p *Packet, err erro
 	// Build payload
 	if p.Header.HasPayload {
 		i.Seek(payloadOffset(offsetStart, p.Header, p.AdaptationField))
-		p.Payload = i.Dump()
+		if payloadPool != nil {
+			// Copy the payload into a pooled buffer rather than allocating a fresh
+			// slice per packet. The demuxer returns it to the pool once the PES it
+			// belongs to has been parsed (see DemuxerOptNoCopyPayload).
+			n := i.Len() - i.Offset()
+			var src []byte
+			if src, err = i.NextBytesNoCopy(n); err != nil {
+				err = fmt.Errorf("astits: fetching payload failed: %w", err)
+				return
+			}
+			bp := payloadPool.Get().(*[]byte)
+			buf := (*bp)[:n]
+			copy(buf, src)
+			p.Payload = buf
+			p.payloadBuf = bp
+		} else {
+			p.Payload = i.Dump()
+		}
 	}
 	return
 }
