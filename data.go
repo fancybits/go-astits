@@ -35,7 +35,7 @@ type MuxerData struct {
 }
 
 // parseData parses a payload spanning over multiple packets and returns a set of data
-func parseData(ps []*Packet, prs PacketsParser, pm *programMap) (ds []*DemuxerData, err error) {
+func parseData(ps []*Packet, prs PacketsParser, pm *programMap, noCopyPayload bool) (ds []*DemuxerData, poolItem *bytesPoolItem, err error) {
 	// Use custom parser first
 	if prs != nil {
 		var skip bool
@@ -53,9 +53,16 @@ func parseData(ps []*Packet, prs PacketsParser, pm *programMap) (ds []*DemuxerDa
 		l += len(p.Payload)
 	}
 
-	// Get the slice for payload from pool
+	// Get the slice for payload from pool. Normally it is returned to the pool
+	// when we are done here, but in no-copy mode the PES payload below points
+	// into it, so ownership is transferred to the caller via poolItem instead.
 	payload := bytesPool.get(l)
-	defer bytesPool.put(payload)
+	returnPayload := true
+	defer func() {
+		if returnPayload {
+			bytesPool.put(payload)
+		}
+	}()
 
 	// Append payload
 	var c int
@@ -92,9 +99,16 @@ func parseData(ps []*Packet, prs PacketsParser, pm *programMap) (ds []*DemuxerDa
 	} else if isPESPayload(payload.s) {
 		// Parse PES data
 		var pesData *PESData
-		if pesData, err = parsePESData(i); err != nil {
+		if pesData, err = parsePESData(i, noCopyPayload); err != nil {
 			err = fmt.Errorf("astits: parsing PES data failed: %w", err)
 			return
+		}
+
+		// In no-copy mode pesData.Data points into payload.s, so keep the pooled
+		// buffer alive and hand it to the caller to release once consumed.
+		if noCopyPayload {
+			returnPayload = false
+			poolItem = payload
 		}
 
 		// Append data
@@ -181,4 +195,43 @@ func isPSIComplete(ps []*Packet) bool {
 	}
 
 	return i.Len() >= i.Offset()
+}
+
+// isPESComplete checks whether payload fully contains PES packet
+func isPESComplete(ps []*Packet) bool {
+	// Get payload length
+	var l int
+	for _, p := range ps {
+		l += len(p.Payload)
+	}
+
+	// Get the slice for payload from pool
+	payload := bytesPool.get(l)
+	defer bytesPool.put(payload)
+
+	// Append payload
+	var o int
+	for _, p := range ps {
+		o += copy(payload.s[o:], p.Payload)
+	}
+
+	// Create reader
+	i := astikit.NewBytesIterator(payload.s)
+
+	// Skip first 3 bytes that are there to identify the PES payload
+	i.Seek(3)
+
+	// Parse header
+	h, _, dataEnd, err := parsePESHeader(i)
+	if err != nil {
+		err = fmt.Errorf("astits: parsing PES header failed: %w", err)
+		return false
+	}
+
+	if h.PacketLength == 0 {
+		// There's no other way to know whether the packet is complete
+		return false
+	}
+
+	return i.Len() >= dataEnd
 }

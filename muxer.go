@@ -29,6 +29,9 @@ type Muxer struct {
 	packetSize             int
 	tablesRetransmitPeriod int // period in PES packets
 
+	transportStreamID uint16
+	pmtPID            uint16
+
 	pm         *programMap // pid -> programNumber
 	pmUpdated  bool
 	pmt        PMTData
@@ -68,6 +71,22 @@ func MuxerOptTablesRetransmitPeriod(newPeriod int) func(*Muxer) {
 	}
 }
 
+// WithTransportStreamID sets the transport stream ID written into PAT.
+// Default is 0.
+func WithTransportStreamID(id uint16) func(*Muxer) {
+	return func(m *Muxer) {
+		m.transportStreamID = id
+	}
+}
+
+// WithPMTPID sets the PID used for PMT packets and advertised in PAT.
+// Default is 0x1000.
+func WithPMTPID(pid uint16) func(*Muxer) {
+	return func(m *Muxer) {
+		m.pmtPID = pid
+	}
+}
+
 // TODO MuxerOptAutodetectPCRPID selecting first video PID for each PMT, falling back to first audio, falling back to any other
 
 func NewMuxer(ctx context.Context, w io.Writer, opts ...func(*Muxer)) *Muxer {
@@ -77,6 +96,8 @@ func NewMuxer(ctx context.Context, w io.Writer, opts ...func(*Muxer)) *Muxer {
 
 		packetSize:             MpegTsPacketSize, // no 192-byte packet support yet
 		tablesRetransmitPeriod: 40,
+
+		pmtPID: pmtStartPID,
 
 		pm: newProgramMap(),
 		pmt: PMTData{
@@ -97,13 +118,13 @@ func NewMuxer(ctx context.Context, w io.Writer, opts ...func(*Muxer)) *Muxer {
 	m.bufWriter = astikit.NewBitsWriter(astikit.BitsWriterOptions{Writer: &m.buf})
 	m.bitsWriter = astikit.NewBitsWriter(astikit.BitsWriterOptions{Writer: m.w})
 
-	// TODO multiple programs support
-	m.pm.setUnlocked(pmtStartPID, programNumberStart)
-	m.pmUpdated = true
-
 	for _, opt := range opts {
 		opt(m)
 	}
+
+	// TODO multiple programs support
+	m.pm.setUnlocked(m.pmtPID, programNumberStart)
+	m.pmUpdated = true
 
 	// to output tables at the very start
 	m.tablesRetransmitCounter = m.tablesRetransmitPeriod
@@ -322,6 +343,7 @@ func (m *Muxer) WriteTables() (int, error) {
 
 func (m *Muxer) generatePAT() error {
 	d := m.pm.toPATDataUnlocked()
+	d.TransportStreamID = m.transportStreamID
 
 	versionNumber := m.patVersion.get()
 	if m.pmUpdated {
@@ -343,7 +365,7 @@ func (m *Muxer) generatePAT() error {
 		Header: &PSISectionHeader{
 			SectionLength:          calcPATSectionLength(d),
 			SectionSyntaxIndicator: true,
-			TableID:                PSITableID(d.TransportStreamID),
+			TableID:                PSITableIDPAT,
 		},
 		Syntax: syntax,
 	}
@@ -432,7 +454,7 @@ func (m *Muxer) generatePMT() error {
 		Header: PacketHeader{
 			HasPayload:                true,
 			PayloadUnitStartIndicator: true,
-			PID:                       pmtStartPID, // FIXME multiple programs support
+			PID:                       m.pmtPID, // FIXME multiple programs support
 			ContinuityCounter:         uint8(m.pmtCC.inc()),
 		},
 		Payload: m.buf.Bytes(),

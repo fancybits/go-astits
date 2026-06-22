@@ -2,6 +2,7 @@ package astits
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/asticode/go-astikit"
@@ -168,7 +169,8 @@ func TestParsePSIData(t *testing.T) {
 	w.Write(totBytes())     // TOT data
 	w.Write(uint32(32))     // TOT CRC32
 	_, err := parsePSIData(astikit.NewBytesIterator(buf.Bytes()))
-	assert.EqualError(t, err, "astits: parsing PSI table failed: astits: Table CRC32 20 != computed CRC32 6969b13")
+	assert.True(t, errors.Is(err, ErrCRC32Mismatch))
+	assert.Equal(t, "astits: parsing PSI table failed: astits: CRC32 mismatch\nastits: Table CRC32 20 != computed CRC32 6969b13", err.Error())
 
 	// Valid
 	d, err := parsePSIData(astikit.NewBytesIterator(psiBytes()))
