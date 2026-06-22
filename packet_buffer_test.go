@@ -1,7 +1,9 @@
 package astits
 
 import (
+	"bufio"
 	"bytes"
+	"io"
 	"testing"
 
 	"github.com/asticode/go-astikit"
@@ -57,4 +59,37 @@ func TestPacketWithInitialGarbage(t *testing.T) {
 	p, err := pb.next()
 	assert.NoError(t, err)
 	assert.NotNil(t, p)
+}
+
+func TestPacketBufferNextPeek(t *testing.T) {
+	// Build a few TS packets.
+	buf := &bytes.Buffer{}
+	w := astikit.NewBitsWriter(astikit.BitsWriterOptions{Writer: buf})
+	for cc := 0; cc < 3; cc++ {
+		b, _ := packet(PacketHeader{ContinuityCounter: uint8(cc), HasPayload: true, PID: 256}, PacketAdaptationField{}, []byte("payload"), false)
+		w.Write(b)
+	}
+	stream := buf.Bytes()
+
+	read := func(r io.Reader) []*Packet {
+		pb, err := newPacketBuffer(r, MpegTsPacketSize, nil, false)
+		assert.NoError(t, err)
+		var ps []*Packet
+		for {
+			p, perr := pb.next()
+			if perr == ErrNoMorePackets {
+				break
+			}
+			assert.NoError(t, perr)
+			ps = append(ps, p)
+		}
+		return ps
+	}
+
+	// A raw reader uses the ReadFull path; a bufio.Reader uses the Peek path.
+	// Both must yield identical packets.
+	fromRaw := read(bytes.NewReader(stream))
+	fromBufio := read(bufio.NewReader(bytes.NewReader(stream)))
+	assert.Len(t, fromRaw, 3)
+	assert.Equal(t, fromRaw, fromBufio)
 }

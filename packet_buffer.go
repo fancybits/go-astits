@@ -146,37 +146,82 @@ func readByte(r io.Reader) (b byte, err error) {
 
 // next fetches the next packet from the buffer
 func (pb *packetBuffer) next() (p *Packet, err error) {
+	// When reading from a bufio.Reader large enough to hold a whole packet, parse
+	// the packet straight out of its buffer (Peek/Discard) instead of copying it
+	// into packetReadBuffer first. The parsed Packet copies whatever it retains
+	// (header by value, payload copied), so the peeked bytes can be discarded
+	// immediately.
+	br, useBufio := pb.r.(*bufio.Reader)
+	if useBufio && pb.packetSize > br.Size() {
+		useBufio = false
+	}
+
 	// Read
-	if pb.packetReadBuffer == nil || len(pb.packetReadBuffer) != pb.packetSize {
+	if !useBufio && (pb.packetReadBuffer == nil || len(pb.packetReadBuffer) != pb.packetSize) {
 		pb.packetReadBuffer = make([]byte, pb.packetSize)
 	}
 
 	// Loop to make sure we return a packet even if first packets are skipped
 	for p == nil {
-		if _, err = io.ReadFull(pb.r, pb.packetReadBuffer); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				err = ErrNoMorePackets
-			} else {
-				err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
+		var buf []byte
+		if useBufio {
+			if buf, err = br.Peek(pb.packetSize); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					err = ErrNoMorePackets
+				} else {
+					err = fmt.Errorf("astits: peeking %d bytes failed: %w", pb.packetSize, err)
+				}
+				return
 			}
-			return
-		}
-
-		for pb.packetReadBuffer[0] != syncByte {
-			nextByte, err := readByte(pb.r)
-			if err != nil {
-				return nil, err
+			// Resync to a sync byte, one byte at a time, if necessary.
+			for buf[0] != syncByte {
+				if _, err = br.Discard(1); err != nil {
+					return nil, fmt.Errorf("astits: discarding to resync failed: %w", err)
+				}
+				if buf, err = br.Peek(pb.packetSize); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						err = ErrNoMorePackets
+					} else {
+						err = fmt.Errorf("astits: peeking %d bytes failed: %w", pb.packetSize, err)
+					}
+					return
+				}
 			}
-
-			pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
+		} else {
+			if _, err = io.ReadFull(pb.r, pb.packetReadBuffer); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					err = ErrNoMorePackets
+				} else {
+					err = fmt.Errorf("astits: reading %d bytes failed: %w", pb.packetSize, err)
+				}
+				return
+			}
+			for pb.packetReadBuffer[0] != syncByte {
+				nextByte, rerr := readByte(pb.r)
+				if rerr != nil {
+					return nil, rerr
+				}
+				pb.packetReadBuffer = append(pb.packetReadBuffer[1:], nextByte)
+			}
+			buf = pb.packetReadBuffer
 		}
 
 		// Parse packet
-		if p, err = parsePacket(astikit.NewBytesIterator(pb.packetReadBuffer), pb.s, pb.payloadPool); err != nil {
+		p, err = parsePacket(astikit.NewBytesIterator(buf), pb.s, pb.payloadPool)
+
+		// Advance past the packet we just parsed (ReadFull already consumed it).
+		if useBufio {
+			if _, derr := br.Discard(pb.packetSize); derr != nil {
+				return nil, fmt.Errorf("astits: discarding %d bytes failed: %w", pb.packetSize, derr)
+			}
+		}
+
+		if err != nil {
 			if !errors.Is(err, errSkippedPacket) {
 				err = fmt.Errorf("astits: building packet failed: %w", err)
 				return
 			}
+			err = nil // skipped packet; loop for the next one
 		}
 	}
 
